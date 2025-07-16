@@ -1,0 +1,151 @@
+import '@whiskeysockets/baileys'; // Importa le dipendenze necessarie per Baileys
+import fetch from 'node-fetch';    // Necessario per scaricare la thumbnail
+
+// --- CONFIGURAZIONE SIMBOLI E PAGAMENTI ---
+const SLOTS = [
+    '🍒', '🍋', '🍊', '🍇', '🔔', '💎', '🍀'
+];
+
+// Percentuali di vincita per combinazione (es. 3 simboli uguali, 2 simboli uguali)
+// Moltiplicatore della puntata
+const PAYOUTS = {
+    'triple': { // Tre simboli uguali
+        '🍒': 20,
+        '🍋': 20,
+        '🍊': 20,
+        '🍇': 25,
+        '🔔': 30,
+        '💎': 60,
+        '🍀': 200 // Jackpot!
+    },
+    'double': { // Due simboli uguali (solo i primi due o gli ultimi due)
+        '🍒': 4,
+        '🍋': 4,
+        '🍊': 4,
+        '🍇': 6,
+        '🔔': 8,
+        '💎': 10,
+        '🍀': 20
+    }
+};
+
+// --- HANDLER DEL COMANDO .slot ---
+let handler = async (m, { conn, text, usedPrefix }) => {
+    const senderId = m.sender;
+    const chatId = m.chat;
+    const betAmount = parseInt(text);
+
+    // --- GESTIONE SALDO UTENTE TRAMITE global.slotDb ---
+    // Assicurati che global.slotDb sia stato inizializzato dal modulo lib/slotDB.js
+    if (typeof global.slotDb === 'undefined' || typeof global.slotDb.data === 'undefined' || typeof global.slotDb.data.users === 'undefined') {
+        console.error("ERRORE: global.slotDb non è configurato. Assicurati che lib/slotDB.js sia importato.");
+        return conn.reply(chatId, `❌ Errore interno del bot: sistema slot non configurato. Contatta l'amministratore.`, m);
+    }
+
+    // Inizializza l'utente nel database slot se non esiste
+    if (typeof global.slotDb.data.users[senderId] === 'undefined') {
+        global.slotDb.data.users[senderId] = {};
+    }
+    // Inizializza il saldo dell'utente a 250 se non esiste o è null/undefined
+    if (typeof global.slotDb.data.users[senderId].money === 'undefined' || global.slotDb.data.users[senderId].money === null) {
+        global.slotDb.data.users[senderId].money = 250; 
+        console.log(`[SLOT] Saldo di ${senderId} inizializzato a 250 in slotdata.json.`);
+    }
+
+    let userMoney = global.slotDb.data.users[senderId].money;
+    console.log(`[SLOT] Saldo di ${senderId} prima della giocata: ${userMoney}`); // LOG per debug
+
+    if (isNaN(betAmount) || betAmount <= 0) {
+        return conn.reply(chatId, `🎰 *SLOT MACHINE* 🎰
+Per giocare, scommetti una quantità di denaro.
+Esempio: \`${usedPrefix}slot 100\` (per scommettere 100).
+Il tuo saldo attuale: ${userMoney}€`, m); // Aggiunto €
+    }
+
+    if (betAmount > userMoney) {
+        return conn.reply(chatId, `💰 Non hai abbastanza denaro! Il tuo saldo attuale è ${userMoney}€.`, m); // Aggiunto €
+    }
+    
+    if (betAmount < 10) { // Esempio: puntata minima
+        return conn.reply(chatId, `📉 La puntata minima è 10€.`, m); // Aggiunto €
+    }
+
+    try {
+        // --- DEDUCO LA PUNTATA ---
+        global.slotDb.data.users[senderId].money -= betAmount; // Deduci la puntata dal saldo reale
+
+        // --- GIRA I RULLI ---
+        const reel1 = SLOTS[Math.floor(Math.random() * SLOTS.length)];
+        const reel2 = SLOTS[Math.floor(Math.random() * SLOTS.length)];
+        const reel3 = SLOTS[Math.floor(Math.random() * SLOTS.length)];
+
+        const result = [reel1, reel2, reel3];
+        const resultDisplay = `${reel1} | ${reel2} | ${reel3}`;
+
+        let winAmount = 0;
+        let message = `🎰 *RISULTATO SLOT MACHINE* 🎰\n\n${resultDisplay}\n\n`;
+
+        // --- CONTROLLA LE VINCITE ---
+        if (reel1 === reel2 && reel2 === reel3) {
+            // Tre simboli uguali
+            winAmount = betAmount * PAYOUTS.triple[reel1];
+            message += `🎉 *JACKPOT!* 🎉 Hai ottenuto 3 ${reel1} e hai vinto ${winAmount}€!\n`; // Aggiunto €
+        } else if (reel1 === reel2 || reel2 === reel3) {
+            // Due simboli uguali (controlla solo il primo o il secondo per semplicità)
+            const symbol = (reel1 === reel2) ? reel1 : reel3; // Prende il simbolo che si ripete
+            winAmount = betAmount * PAYOUTS.double[symbol];
+            message += `🥳 *COMPLIMENTI!* 🥳 Hai ottenuto 2 ${symbol} e hai vinto ${winAmount}€!\n`; // Aggiunto €
+        } else {
+            // Nessuna vincita
+            message += `😭 *Spiacente!* 😭 Nessuna combinazione vincente. Hai perso ${betAmount}€.\n`; // Aggiunto €
+        }
+
+        // --- AGGIORNA IL SALDO ---
+        global.slotDb.data.users[senderId].money += winAmount; // Aggiungi la vincita al saldo reale
+        console.log(`[SLOT] Saldo di ${senderId} dopo la vincita/perdita: ${global.slotDb.data.users[senderId].money}`); // LOG per debug
+
+        message += `\nIl tuo nuovo saldo: ${global.slotDb.data.users[senderId].money}€`; // Aggiunto €
+
+        // --- PREPARA E INVIA IL MESSAGGIO CON EMBED E MOSTRA CANALE ---
+        const thumbnailUrl = "https://i.ibb.co/7xFKwN46/Senza-titolo-14-20250716125942.png"; // Immagine per l'embed
+        let thumbnailBuffer;
+        try {
+            thumbnailBuffer = await (await fetch(thumbnailUrl)).buffer();
+        } catch (e) {
+            console.error("Errore nel download della thumbnail:", e);
+            thumbnailBuffer = Buffer.from('');
+        }
+
+        await conn.sendMessage(chatId, {
+|\\            text: message.trim(),
+            contextInfo: {
+                forwardingScore: 1,
+                isForwarded: true,
+                forwardedNewsletterMessageInfo: {
+                    newsletterJid: '120363419284785624@newsletter', // Sostituisci con il tuo JID newsletter
+                    serverMessageId: '',
+                    newsletterName: "GiuseMD-V3 → Slot Machine" // Nome dell'account e non so come si chiama la simulazione di link di un 45 che del canale/newsletter
+                },
+                externalAdReply: { // L'embed visivo
+                    title: `🎰 Slot Machine - Gioca Ora!`https://i.ibb.co/7xFKwN46/Senza-titolo-14-20250716125942.png mi
+                    body: `Fai girare i rulli e tenta la fortuna!`,
+                    mediaType: 1,
+                    renderLargerThumbnail: false,
+                    previewType: "PHOTO",
+                    thumbnail: thumbnailBuffer,
+                    sourceUrl: 'https://wa.me/' + conn.user.jid.split('@')[0] // Link del bot
+                }
+            }
+        }, { quoted: m }); // Quota il messaggio originale per un contesto
+        
+    } catch (error) {
+        console.error("Errore nel comando .slot:", error);
+        conn.reply(chatId, `❌ Si è verificato un errore durante l'esecuzione della slot machine. Riprova più tardi.`, m);
+    }
+};
+
+handler.help = ['slot <amount>'];
+handler.tags = ['games'];
+handler.command = /^(slot)$/i;
+
+export default handler;

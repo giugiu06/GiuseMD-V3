@@ -1,0 +1,130 @@
+import '@whiskeysockets/baileys'; // Importa le dipendenze necessarie per Baileys
+import fetch from 'node-fetch';    // Necessario per scaricare le thumbnail
+
+// URL delle immagini per le thumbnail (puoi sostituirle con le tue)
+const THUMBNAIL_OPEN_URL = "https://placehold.co/128x128/00FF00/FFFFFF?text=OPEN"; // Immagine per chat aperta
+const THUMBNAIL_CLOSED_URL = "https://placehold.co/128x128/FF0000/FFFFFF?text=CLOSED"; // Immagine per chat chiusa
+
+let handler = async (m, { conn, command, participants }) => {
+    // Questo comando può essere usato solo nei gruppi
+    if (!m.isGroup) {
+        return conn.reply(m.chat, `❌ Questo comando può essere usato solo nei gruppi.`, m);
+    }
+
+    // --- VERIFICA CRITICA: Il bot deve essere amministratore del gruppo ---
+    const botId = conn.user.jid;
+    const isBotAdmin = participants.find(p => p.id === botId)?.admin; // Controlla se il bot ha il flag 'admin'
+    if (!isBotAdmin) {
+        // Messaggio chiaro se il bot non è admin
+        return conn.reply(m.chat, `❌ Il bot deve essere amministratore del gruppo per eseguire questo comando.`, m);
+    }
+
+    // L'utente che esegue il comando deve essere amministratore del gruppo
+    const senderId = m.sender;
+    const isAdmin = participants.find(p => p.id === senderId)?.admin;
+    if (!isAdmin) {
+        return conn.reply(m.chat, `🚫 *ACCESSO NEGATO* 🚫
+Questo comando può essere usato solo dagli *amministratori* del gruppo.`, m);
+    }
+
+    let groupMetadata = await conn.groupMetadata(m.chat);
+    // 'announce' è true se solo gli admin possono inviare messaggi (chat chiusa)
+    let currentSetting = groupMetadata.announce ? 'announcement' : 'not_announcement'; 
+
+    let newSetting;
+    let responseMessage = "";
+    let embedTitle = "";
+    let thumbnailUrl = "";
+    let mentions = []; // Array per le menzioni
+
+    try {
+        if (command === 'chiuso') {
+            if (currentSetting === 'announcement') {
+                return conn.reply(m.chat, `ℹ️ La chat è già chiusa (solo admin).`, m);
+            }
+            newSetting = 'announcement';
+            embedTitle = `Chat Chiusa 🔒`;
+            thumbnailUrl = THUMBNAIL_CLOSED_URL;
+            
+            // Messaggio per chat chiusa con menzione esplicita degli admin
+            const adminJids = participants.filter(p => p.admin).map(p => p.id);
+            const adminMentions = adminJids.map(jid => `@${jid.split('@')[0]}`).join(' ');
+            responseMessage = `@${senderId.split('@')[0]} ha chiuso la chat!\n\nAmministratori: ${adminMentions}`;
+            mentions = adminJids; // Menzione esplicita per gli admin
+            
+        } else if (command === 'aperto') {
+            if (currentSetting === 'not_announcement') {
+                return conn.reply(m.chat, `ℹ️ La chat è già aperta (tutti possono scrivere).`, m);
+            }
+            newSetting = 'not_announcement';
+            embedTitle = `Chat Aperta 🔓`;
+            thumbnailUrl = THUMBNAIL_OPEN_URL;
+            
+            // Messaggio per chat aperta con hidetag (menzione nascosta di tutti)
+            const allParticipantsJids = participants.map(u => conn.decodeJid(u.id));
+            responseMessage = `@${senderId.split('@')[0]} ha aperto la chat!\n\n> _Tocca qui sotto per saperne di più!_ 👇`;
+            mentions = allParticipantsJids; // Menzione nascosta di tutti
+        } else {
+            return conn.reply(m.chat, `Comando non riconosciuto. Usa \`.aperto\` o \`.chiuso\`.`, m);
+        }
+
+        // --- Esegue il cambio di impostazione del gruppo ---
+        // Questa è la riga critica che modifica le impostazioni di WhatsApp.
+        await conn.groupSettingUpdate(m.chat, 'messageSend', newSetting);
+
+        let thumbnailBuffer;
+        try {
+            thumbnailBuffer = await (await fetch(thumbnailUrl)).buffer();
+        } catch (e) {
+            console.error("Errore nel download della thumbnail per l'embed:", e);
+            thumbnailBuffer = Buffer.from(''); // Usa un buffer vuoto se il download fallisce
+        }
+
+        // Invia il messaggio di annuncio con embed e mostra canale
+        await conn.sendMessage(m.chat, {
+            text: responseMessage,
+            mentions: mentions, // Includi le menzioni appropriate (admin o tutti)
+            contextInfo: {
+                forwardingScore: 1,
+                isForwarded: true,
+                forwardedNewsletterMessageInfo: {
+                    newsletterJid: '120363419284785624@newsletter', // Sostituisci con il tuo JID newsletter
+                    serverMessageId: '',
+                    newsletterName: "GiuseMD-V3 → Gestione Chat" // Nome del canale/newsletter
+                },
+                externalAdReply: {
+                    title: embedTitle,
+                    body: `Per altre info premi qui`,
+                    mediaType: 1,
+                    renderLargerThumbnail: false,
+                    previewType: "PHOTO",
+                    thumbnail: thumbnailBuffer,
+                    sourceUrl: 'https://wa.me/' + conn.user.jid.split('@')[0] // Link del bot
+                }
+            }
+        });
+
+    } catch (error) {
+        // --- LOGGING DETTAGLIATO DELL'ERRORE ---
+        console.error("Errore nel comando chat-control:", error);
+        // Messaggio di errore più specifico per l'utente
+        let errorMessage = `❌ Si è verificato un errore durante la modifica delle impostazioni della chat.`;
+        if (error.message.includes('not-authorized') || error.message.includes('forbidden')) {
+            errorMessage += ` Il bot potrebbe non avere i permessi di amministratore o ci sono restrizioni nel gruppo.`;
+        } else {
+            errorMessage += ` Dettagli: ${error.message}`;
+        }
+        conn.reply(m.chat, errorMessage, m);
+    }
+};
+
+// Definisce i comandi che attivano questo handler
+handler.command = /^(aperto|chiuso)$/i;
+// Questo comando può essere usato solo nei gruppi
+handler.group = true;
+// Solo gli amministratori del gruppo possono usare questo comando
+handler.admin = true;
+// Il bot deve essere amministratore del gruppo per poter modificare le impostazioni
+handler.botAdmin = true;
+
+export default handler;

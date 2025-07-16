@@ -1,0 +1,123 @@
+import '@whiskeysockets/baileys'; // Importa le dipendenze necessarie per Baileys
+import fetch from 'node-fetch';    // Necessario per scaricare le thumbnail
+import { google_search } from 'google_search'; // Importa l'API di Google Search
+
+// Handler principale del comando
+let handler = async (m, { conn, text, usedPrefix }) => {
+    const chatId = m.chat;
+
+    if (!text) {
+        return conn.reply(chatId, `🚗 *Specifiche Auto*\n\nPer ottenere le specifiche di un'auto, usa:\n\`${usedPrefix}car <modello_auto>\`\n\nEsempio: \`${usedPrefix}car Ferrari Roma\``, m);
+    }
+
+    const carModel = text.trim();
+    let specs = {};
+    let fullSnippet = ''; // Per raccogliere tutti i testi rilevanti
+
+    try {
+        // --- Ricerca delle specifiche dell'auto ---
+        const searchQueries = [
+            `${carModel} specifiche auto`,
+            `${carModel} scheda tecnica`,
+            `${carModel} motore potenza`,
+            `${carModel} dimensioni bagagliaio`
+        ];
+
+        const searchResults = await google_search.search(searchQueries);
+        
+        // Raccogli tutti gli snippet per un'estrazione più completa
+        for (const result of searchResults) {
+            if (result.results) {
+                for (const item of result.results) {
+                    if (item.snippet) {
+                        fullSnippet += item.snippet + ' ';
+                    }
+                }
+            }
+        }
+
+        // Estrazione delle specifiche dal testo raccolto
+        // Questa estrazione è euristica e dipende dalla qualità degli snippet.
+        // Potrebbe essere necessario affinarla per casi specifici.
+        specs.engine = fullSnippet.match(/motore:\s*([^,.\n]+)/i)?.[1]?.trim() || 'Non disponibile';
+        specs.horsepower = fullSnippet.match(/(\d+)\s*cv|(\d+)\s*hp/i)?.[1] || fullSnippet.match(/potenza:\s*(\d+)/i)?.[1] || 'Non disponibile';
+        specs.torque = fullSnippet.match(/(\d+)\s*nm/i)?.[1] || 'Non disponibile';
+        specs.acceleration = fullSnippet.match(/0-100\s*km\/h\s*in\s*(\d+\.?\d*)\s*s/i)?.[1] || 'Non disponibile';
+        specs.topSpeed = fullSnippet.match(/velocità\s*massima:\s*(\d+)\s*km\/h/i)?.[1] || 'Non disponibile';
+        specs.consumption = fullSnippet.match(/consumo\s*medio:\s*(\d+\.?\d*)\s*l\/100km/i)?.[1] || fullSnippet.match(/consumo:\s*(\d+\.?\d*)\s*km\/l/i)?.[1] ? `${fullSnippet.match(/consumo:\s*(\d+\.?\d*)\s*km\/l/i)[1]} km/l` : 'Non disponibile';
+        specs.dimensions = fullSnippet.match(/(lunghezza|dimensioni):\s*([^.\n]+)/i)?.[2]?.trim() || 'Non disponibile';
+        specs.trunkVolume = fullSnippet.match(/bagagliaio:\s*(\d+)\s*l/i)?.[1] || 'Non disponibile';
+        specs.seats = fullSnippet.match(/posti:\s*(\d+)/i)?.[1] || 'Non disponibile';
+        specs.transmission = fullSnippet.match(/cambio:\s*([^,.\n]+)/i)?.[1]?.trim() || 'Non disponibile';
+        specs.fuelType = fullSnippet.match(/alimentazione:\s*([^,.\n]+)/i)?.[1]?.trim() || 'Non disponibile';
+
+
+        // --- Costruzione del messaggio di risposta ---
+        let responseMessage = `🚗 *Specifiche Auto: ${carModel}*
+
+*Motore:* ${specs.engine}
+*Potenza:* ${specs.horsepower} CV
+*Coppia:* ${specs.torque} Nm
+*Accelerazione 0-100 km/h:* ${specs.acceleration} s
+*Velocità Massima:* ${specs.topSpeed} km/h
+*Consumo Medio:* ${specs.consumption}
+*Dimensioni:* ${specs.dimensions}
+*Volume Bagagliaio:* ${specs.trunkVolume} L
+*Posti:* ${specs.seats}
+*Cambio:* ${specs.transmission}
+*Alimentazione:* ${specs.fuelType}
+
+---
+
+⚠️ *Nota sui Prezzi dei Componenti:*
+Non è possibile fornire un elenco esaustivo e in tempo reale dei prezzi di ogni singolo componente tramite questa funzione. Questi dati sono specifici per produttore, modello, anno e mercato, e sono solitamente disponibili presso concessionari ufficiali, ricambisti specializzati o tramite database professionali.
+
+Per prezzi di componenti specifici, si consiglia di consultare:
+•  Siti web ufficiali dei produttori
+•  Ricambisti auto autorizzati
+•  Concessionari o officine specializzate
+`;
+
+        // --- PREPARA E INVIA IL MESSAGGIO CON EMBED E MOSTRA CANALE ---
+        const thumbnailUrl = "https://i.ibb.co/vCsZYV3p/scroll-1f4dc.webp"; // Immagine per l'embed
+        let thumbnailBuffer;
+        try {
+            thumbnailBuffer = await (await fetch(thumbnailUrl)).buffer();
+        } catch (e) {
+            console.error("Errore nel download della thumbnail:", e);
+            thumbnailBuffer = Buffer.from('');
+        }
+
+        await conn.sendMessage(chatId, {
+            text: responseMessage.trim(),
+            contextInfo: {
+                forwardingScore: 1,
+                isForwarded: true,
+                forwardedNewsletterMessageInfo: {
+                    newsletterJid: '120363419284785624@newsletter', // Sostituisci con il tuo JID newsletter
+                    serverMessageId: '',
+                    newsletterName: "GiuseMD-V3 → Auto Specs" // Nome del canale/newsletter
+                },
+                externalAdReply: { // L'embed visivo
+                    title: `🚗 ${carModel} - Specifiche`,
+                    body: `Dettagli tecnici del veicolo.`,
+                    mediaType: 1,
+                    renderLargerThumbnail: false,
+                    previewType: "PHOTO",
+                    thumbnail: thumbnailBuffer,
+                    sourceUrl: 'https://wa.me/' + conn.user.jid.split('@')[0] // Link del bot
+                }
+            }
+        }, { quoted: m }); // Quota il messaggio originale per un contesto
+        
+    } catch (error) {
+        console.error("Errore nel comando .car:", error);
+        conn.reply(chatId, `❌ Si è verificato un errore durante la ricerca delle specifiche per "${carModel}". Prova con un modello diverso o riprova più tardi.`, m);
+    }
+};
+
+handler.help = ['car <model>'];
+handler.tags = ['info', 'tools'];
+handler.command = /^(car)$/i;
+
+export default handler;

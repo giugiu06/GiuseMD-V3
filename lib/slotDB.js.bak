@@ -1,0 +1,67 @@
+import fs from 'fs';
+import path from 'path';
+
+// Definisce il percorso del file del database slot.
+// Verrà creato nella stessa directory del file principale del tuo bot (es. main.js o index.js).
+const SLOT_DATABASE_FILE = path.resolve('./slotdata.json'); 
+
+// Inizializza global.slotDb solo se non è già stato definito.
+// Questo previene la sovrascrittura se il modulo viene importato più volte.
+if (typeof global.slotDb === 'undefined') {
+    try {
+        if (fs.existsSync(SLOT_DATABASE_FILE)) {
+            // Se il file esiste, lo carica
+            global.slotDb = JSON.parse(fs.readFileSync(SLOT_DATABASE_FILE, 'utf8'));
+            console.log(`[SLOT DB] Database slot caricato da ${SLOT_DATABASE_FILE}`);
+        } else {
+            // Se il file non esiste, crea un nuovo database vuoto
+            global.slotDb = { data: { users: {} } }; // Struttura per memorizzare i dati degli utenti
+            fs.writeFileSync(SLOT_DATABASE_FILE, JSON.stringify(global.slotDb, null, 2), 'utf8');
+            console.log(`[SLOT DB] Nuovo database slot creato in ${SLOT_DATABASE_FILE}`);
+        }
+    } catch (e) {
+        // Gestisce errori di caricamento/parsing del JSON
+        console.error(`[SLOT DB ERROR] Errore nel caricamento/creazione del database slot:`, e);
+        // Fallback a un database in memoria in caso di errore grave
+        global.slotDb = { data: { users: {} } }; 
+    }
+}
+
+/**
+ * Funzione per salvare lo stato corrente del database slot su disco.
+ */
+function saveSlotDatabase() {
+    try {
+        // Salva solo se global.slotDb e i suoi dati sono definiti
+        if (global.slotDb && global.slotDb.data) { 
+            fs.writeFileSync(SLOT_DATABASE_FILE, JSON.stringify(global.slotDb, null, 2), 'utf8');
+            // Puoi decommentare la riga seguente per vedere i log di salvataggio frequenti
+            // console.log(`[SLOT DB] Database slot salvato con successo.`); 
+        }
+    } catch (e) {
+        console.error(`[SLOT DB ERROR] Errore nel salvataggio del database slot:`, e);
+    }
+}
+
+// --- Configurazione del salvataggio automatico ---
+
+// Salva il database periodicamente (ogni 5 secondi in questo esempio)
+// Questo assicura che le modifiche non vengano perse in caso di crash inattesi.
+setInterval(saveSlotDatabase, 5 * 1000); 
+
+// Salva il database alla chiusura del processo (es. Ctrl+C o arresto del server)
+// Questo è fondamentale per non perdere gli ultimi dati.
+process.on('exit', () => {
+    console.log('[SLOT DB] Salvataggio finale del database slot prima dell\'uscita...');
+    saveSlotDatabase();
+});
+
+// Cattura anche il segnale SIGINT (tipico di Ctrl+C nei terminali)
+process.on('SIGINT', () => {
+    console.log('[SLOT DB] SIGINT ricevuto, salvataggio e uscita...');
+    saveSlotDatabase();
+    process.exit();
+});
+
+// Non esportiamo nulla perché modifichiamo direttamente global.slotDb
+// Questo modulo deve essere importato/eseguito una volta all'avvio del bot.
